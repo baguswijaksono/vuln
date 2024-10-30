@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+session_start();
 
 $routes = [
     'GET' => [],
@@ -9,89 +10,15 @@ $routes = [
     'DELETE' => [],
 ];
 
-function conn()
-{
-    $servername = "localhost";
-    $username = "phpmyadmin";
-    $password = "your_password";
-    $dbname = "vulnerability_tracker";
-    $conn = new mysqli($servername, $username, $password, $dbname);
-
-    if ($conn->connect_error) {
-        die("Connection failed: " . $conn->connect_error);
-    }
-
-    return $conn;
-}
-
-function middleware()
-{
-    session_start();
-
-    if (!isset($_SESSION['authenticated']) || !$_SESSION['authenticated']) {
-        header("Location: /login");
-        exit();
-    }
-}
-
-function login($error = null)
-{
-?>
-    <!DOCTYPE html>
-    <html>
-
-    <head>
-        <title>Login</title>
-    </head>
-
-    <body>
-        <h2>Login</h2>
-        <form method="post" action="/authenticate">
-            <input type="password" name="password" placeholder="Enter password" required>
-            <button type="submit">Login</button>
-        </form>
-        <?php if ($error): ?>
-            <p><?php echo htmlspecialchars($error); ?></p>
-        <?php endif; ?>
-    </body>
-
-    </html>
-<?php
-}
-
-function authenticate()
-{
-    session_start();
-    define('CORRECT_PASSWORD_HASH', password_hash('your-here', PASSWORD_DEFAULT));
-
-    if (password_verify($_POST['password'], CORRECT_PASSWORD_HASH)) {
-        $_SESSION['authenticated'] = true;
-        header("Location: /");
-        exit();
-    } else {
-        $error = "Invalid password.";
-        login($error);
-    }
-}
-
-function logout()
-{
-    session_start();
-    session_unset();
-    session_destroy();
-    header("Location: /login");
-    exit();
-}
+require_once 'db.php';
 
 function export()
 {
     middleware();
     header('Content-Type: text/csv');
     header('Content-Disposition: attachment;filename="vulnerabilities.csv"');
-
     $output = fopen('php://output', 'w');
     fputcsv($output, array('ID', 'Title', 'Description', 'Severity', 'Reported Date', 'Status'));
-
     $conn = conn();
     $stmt = $conn->query("SELECT * FROM vulnerabilities");
     while ($row = $stmt->fetch_assoc()) {
@@ -121,7 +48,7 @@ function returntohome()
 function create()
 {
     middleware();
-    echo '<form method="post" action="/store">';
+    echo '<form method="post" action="/s">';
     echo '<input type="text" name="title" placeholder="Title" required>';
     echo '<textarea name="description" placeholder="Description" required></textarea>';
     echo '<select name="severity">';
@@ -214,7 +141,7 @@ function editForm($id)
     <body>
         <div class="container">
             <h2>Edit Vulnerability</h2>
-            <form method="post" action="/update/<?php echo $vulnerability['id']; ?>" enctype="application/x-www-form-urlencoded" onsubmit="event.preventDefault(); fetch(this.action, { method: 'PUT', body: new URLSearchParams(new FormData(this)) }).then(response => { if (response.ok) { window.location.href = '/'; } else { alert('Failed to update vulnerability'); } });">
+            <form method="post" action="/u/<?php echo $vulnerability['id']; ?>" enctype="application/x-www-form-urlencoded" onsubmit="event.preventDefault(); fetch(this.action, { method: 'PUT', body: new URLSearchParams(new FormData(this)) }).then(response => { if (response.ok) { window.location.href = '/'; } else { alert('Failed to update vulnerability'); } });">
                 <div class="form-group">
                     <label for="title">Title</label>
                     <input type="text" class="form-control" id="title" name="title" value="<?php echo htmlspecialchars($vulnerability['title']); ?>" required>
@@ -245,22 +172,6 @@ function editForm($id)
 
     </html>
 <?php
-}
-
-function migrate()
-{
-    middleware();
-    $conn = conn();
-    $conn->query("CREATE TABLE IF NOT EXISTS vulnerabilities (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        title VARCHAR(255) NOT NULL,
-        description TEXT NOT NULL,
-        severity ENUM('Low', 'Medium', 'High') NOT NULL,
-        status ENUM('Open', 'Closed') NOT NULL,
-        reported_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )");
-    $conn->close();
-    echo "Migration successful!";
 }
 
 function update($id)
@@ -313,7 +224,6 @@ function delete(string $path, callable $handler): void
     $routes['DELETE'][$path] = $handler;
 }
 
-
 function dispatch(string $url, string $method): void
 {
     global $routes;
@@ -343,24 +253,19 @@ function handleNotFound(): void
 
 function listen(): void
 {
-    $url = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-    $method = $_SERVER['REQUEST_METHOD'];
-
+    post('/v', 'middleware');
     get('/', 'home');
-    get('/login', 'login');
-    get('/logout', 'logout');
-    get('/export', 'export');
-    post('/store', 'store');
-    get('/create', 'create');
-    get('/import', 'importform');
-    post('/import', 'import');
-    get('/edit/([\w-]+)', 'editForm');
-    put('/update/([\w-]+)', 'update');
-    delete('/destroy/([\w-]+)', 'destroy');
-    get('/migrate', 'migrate');
-    post('/authenticate', 'authenticate');
+    get('/e', 'export');
+    post('/s', 'store');
+    get('/c', 'create');
+    get('/if', 'importform');
+    post('/i', 'import');
+    get('/e/([\w-]+)', 'editForm');
+    put('/u/([\w-]+)', 'update');
+    delete('/d/([\w-]+)', 'destroy');
 
-    dispatch($url, $method);
+
+    dispatch(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), $_SERVER['REQUEST_METHOD']);
 }
 
 function home(): void
@@ -371,11 +276,9 @@ function home(): void
     $offset = ($page - 1) * $limit;
     $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-    // Initialize filters
     $severityFilter = isset($_GET['severity']) && $_GET['severity'] !== '' ? $_GET['severity'] : null;
     $statusFilter = isset($_GET['status']) && $_GET['status'] !== '' ? $_GET['status'] : null;
 
-    // Build the WHERE clause
     $searchSql = ' WHERE 1=1';
     $params = [];
     if ($search) {
@@ -393,12 +296,10 @@ function home(): void
         $params[] = $statusFilter;
     }
 
-    // Get total records for pagination
     $conn = conn();
     $totalQuery = "SELECT COUNT(*) FROM vulnerabilities" . $searchSql;
     $totalStmt = $conn->prepare($totalQuery);
 
-    // Bind params only if there are any
     if (!empty($params)) {
         $totalStmt->bind_param(str_repeat('s', count($params)), ...$params);
     }
@@ -409,15 +310,12 @@ function home(): void
     $totalStmt->close();
     $totalPages = ceil($totalRecords / $limit);
 
-    // Fetch vulnerabilities based on search, filters, and pagination
     $vulnQuery = "SELECT * FROM vulnerabilities" . $searchSql . " LIMIT ? OFFSET ?";
     $stmt = $conn->prepare($vulnQuery);
 
-    // Add limit and offset to params
     $params[] = $limit;
     $params[] = $offset;
 
-    // Bind the parameters (including integers for limit and offset)
     if (!empty($params)) {
         $stmt->bind_param(str_repeat('s', count($params) - 2) . 'ii', ...$params);
     }
@@ -429,11 +327,9 @@ function home(): void
     $conn->close();
 ?>
 
-    <!-- Search and Filter Form -->
     <form method="GET" action="">
         <input type="text" name="search" placeholder="Search vulnerabilities" value="<?php echo htmlspecialchars($search); ?>">
 
-        <!-- Filter by Severity -->
         <select name="severity">
             <option value="">All Severities</option>
             <option value="Low" <?php echo $severityFilter === 'Low' ? 'selected' : ''; ?>>Low</option>
@@ -442,7 +338,6 @@ function home(): void
             <option value="Critical" <?php echo $severityFilter === 'Critical' ? 'selected' : ''; ?>>Critical</option>
         </select>
 
-        <!-- Filter by Status -->
         <select name="status">
             <option value="">All Statuses</option>
             <option value="Open" <?php echo $statusFilter === 'Open' ? 'selected' : ''; ?>>Open</option>
@@ -453,7 +348,6 @@ function home(): void
         <button type="submit" class="btn btn-primary">Search</button>
     </form>
 
-    <!-- Table Display -->
     <table class="table">
         <thead>
             <tr>
@@ -475,8 +369,8 @@ function home(): void
                         <td><?php echo htmlspecialchars($vulnerability['reported_date']); ?></td>
                         <td><?php echo htmlspecialchars($vulnerability['status']); ?></td>
                         <td>
-                            <a href="edit/<?php echo $vulnerability['id']; ?>">Edit</a> |
-                            <a href="#" onclick="event.preventDefault(); if (confirm('Are you sure you want to delete this item?')) { fetch('/destroy/<?php echo $vulnerability['id']; ?>', { method: 'DELETE' }).then(response => { if (response.ok) { window.location.href = '/'; } else { alert('Failed to delete vulnerability'); } }); }">Delete</a>
+                            <a href="/e/<?php echo $vulnerability['id']; ?>">Edit</a> |
+                            <a href="#" onclick="event.preventDefault(); if (confirm('Are you sure you want to delete this item?')) { fetch('/d/<?php echo $vulnerability['id']; ?>', { method: 'DELETE' }).then(response => { if (response.ok) { window.location.href = '/'; } else { alert('Failed to delete vulnerability'); } }); }">Delete</a>
                         </td>
                     </tr>
                 <?php endforeach; ?>
@@ -488,7 +382,6 @@ function home(): void
         </tbody>
     </table>
 
-    <!-- Pagination -->
     <div class="pagination">
         <?php if ($page > 1): ?>
             <a href="<?php echo generateUrl($page - 1); ?>" class="btn btn-secondary">Previous</a>
@@ -505,12 +398,9 @@ function home(): void
         <?php endif; ?>
     </div>
 
-    <a href="/import" class="btn btn-primary">Import</a>
-    <a href="/create" class="btn btn-primary">Create</a>
-    <a href="/export" class="btn btn-primary">Export</a>
-    <a href="/migrate" class="btn btn-primary">Migrate</a>
-    <a href="/logout" class="btn btn-primary">Logout</a>
-
+    <a href="/if" class="btn btn-primary">Import</a>
+    <a href="/c" class="btn btn-primary">Create</a>
+    <a href="/e" class="btn btn-primary">Export</a>
 <?php
 }
 
@@ -521,6 +411,28 @@ function generateUrl($page)
         ($search ? "&search=" . urlencode($search) : '') .
         ($severityFilter ? "&severity=" . urlencode($severityFilter) : '') .
         ($statusFilter ? "&status=" . urlencode($statusFilter) : '');
+}
+
+function middleware()
+{
+    $hashed_password = '$2y$10$A5XBobk5O4dzipZSEIDEkeZggwzM/YaaqAuDP9mLAWjqQ6DM0kVIu';
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_SESSION['original_password'])) {
+        if (password_verify($_POST['password'], $hashed_password)) {
+            $_SESSION['original_password'] = $_POST['password'];
+            header('Location: /');
+            exit;
+        } else {
+            echo 'Invalid password. Please try again.';
+        }
+    }
+
+    if (!isset($_SESSION['original_password']) || !password_verify($_SESSION['original_password'], $hashed_password)) {
+        echo '<form action="/v" method="post">
+            <input type="password" name="password" id="password" placeholder="Password">
+            <button type="submit">Unlock</button>
+          </form>';
+        exit;
+    }
 }
 
 listen();
